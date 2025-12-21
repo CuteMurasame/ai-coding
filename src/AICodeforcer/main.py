@@ -4,8 +4,6 @@ import sys
 
 from dotenv import load_dotenv
 
-from AICodeforcer.agents import AlgorithmSolver
-
 load_dotenv()
 
 
@@ -49,17 +47,44 @@ def print_solution(python_code: str | None, cpp_code: str | None, passed: bool) 
 
 def main() -> int:
     """Main entry point."""
-    print("=" * 60)
-    print("  AICodeforcer - Gemini 算法题解 Agent")
-    print("=" * 60)
-    print()
-
     import os
     api_key = os.environ.get("GEMINI_API_KEY")
     if not api_key:
         print("错误: 请设置 GEMINI_API_KEY 环境变量")
         return 1
 
+    print("=" * 60)
+    print("  AICodeforcer - Gemini 算法题解 Agent")
+    print("=" * 60)
+    print()
+    print("请选择模式:")
+    print("  1. 标准算法题 (对拍验证)")
+    print("  2. 交互题")
+    print()
+
+    try:
+        choice = input("选择 (1/2): ").strip()
+    except EOFError:
+        return 0
+
+    if choice == "1":
+        return run_standard_solver(api_key)
+    elif choice == "2":
+        return run_interactive_solver(api_key)
+    else:
+        print("无效选择")
+        return 1
+
+
+def run_standard_solver(api_key: str) -> int:
+    """运行标准算法题求解器。"""
+    from AICodeforcer.standard.agents import AlgorithmSolver
+
+    print()
+    print("=" * 60)
+    print("  标准算法题模式")
+    print("=" * 60)
+    print()
     print("请粘贴完整的题目 (输入 END 结束):")
     print("-" * 60)
 
@@ -90,8 +115,8 @@ def main() -> int:
             print(f"\n--- 尝试 #{attempt} ---")
             print("-" * 40)
             code_lines = code.split("\n")
-            for l in code_lines[:30]:
-                print(l)
+            for line in code_lines[:30]:
+                print(line)
             if len(code_lines) > 30:
                 print(f"... ({len(code_lines) - 30} more lines)")
             print("-" * 40)
@@ -130,6 +155,124 @@ def main() -> int:
             solution, cpp_code, passed = solver.continue_solving(
                 feedback=feedback,
                 max_attempts=50,
+                on_attempt=on_attempt,
+            )
+
+        return 0
+
+    except KeyboardInterrupt:
+        print("\n\n已取消")
+        return 130
+
+    except Exception as e:
+        print(f"\n错误: {e}")
+        import traceback
+        traceback.print_exc()
+        return 1
+
+
+def run_interactive_solver(api_key: str) -> int:
+    """运行交互题求解器。"""
+    from AICodeforcer.interactive.agents import InteractivePreprocessor, InteractiveSolver
+
+    print()
+    print("=" * 60)
+    print("  交互题模式")
+    print("=" * 60)
+    print()
+    print("请粘贴完整的交互题题目 (输入 END 结束):")
+    print("-" * 60)
+
+    lines = []
+    while True:
+        try:
+            line = input()
+            if line.strip() == "END":
+                break
+            lines.append(line)
+        except EOFError:
+            break
+
+    text = "\n".join(lines)
+
+    if not text.strip():
+        print("错误: 题目不能为空")
+        return 1
+
+    print("-" * 60)
+    print("开始分析交互题...")
+    print("=" * 60)
+
+    try:
+        # 阶段 1: 预处理 - 生成数据生成器和评测机
+        print("\n[阶段 1] 生成数据生成器和评测机...")
+        preprocessor = InteractivePreprocessor(api_key=api_key)
+        result = preprocessor.generate(text, max_attempts=10)
+
+        if not result:
+            print("\n错误: 无法生成评测机和数据生成器")
+            return 1
+
+        generator_code, judge_code = result
+        print("\n" + "=" * 60)
+        print("  评测机和数据生成器生成成功!")
+        print("=" * 60)
+
+        # 阶段 2: 求解 - 生成交互代码并对拍验证
+        print("\n[阶段 2] 开始求解交互题...")
+        solver = InteractiveSolver(api_key=api_key)
+
+        def on_attempt(attempt: int, code: str) -> None:
+            print(f"\n--- 尝试 #{attempt} ---")
+            print("-" * 40)
+            code_lines = code.split("\n")
+            for line in code_lines[:30]:
+                print(line)
+            if len(code_lines) > 30:
+                print(f"... ({len(code_lines) - 30} more lines)")
+            print("-" * 40)
+
+        solution, cpp_code, passed = solver.solve(
+            problem_text=text,
+            generator_code=generator_code,
+            judge_code=judge_code,
+            max_attempts=50,
+            on_attempt=on_attempt,
+        )
+
+        # 阶段 3: 输出和反馈循环
+        while True:
+            print_solution(solution, cpp_code, passed)
+
+            print("\n" + "-" * 60)
+            print("请输入提交结果反馈 (输入 AC/done/quit 结束):")
+            print("  例如: TLE on test 5, WA on test 3, MLE, RE")
+            print("-" * 60)
+
+            try:
+                feedback = input("> ").strip()
+            except EOFError:
+                print("\n已结束")
+                break
+
+            if not feedback:
+                continue
+
+            feedback_lower = feedback.lower()
+            if feedback_lower in ("ac", "done", "quit", "exit", "q"):
+                print("\n" + "=" * 60)
+                print("  恭喜 AC!" if feedback_lower == "ac" else "  已结束")
+                print("=" * 60)
+                break
+
+            print("\n" + "=" * 60)
+            print(f"  收到反馈: {feedback}")
+            print("  继续优化中...")
+            print("=" * 60)
+
+            solution, cpp_code, passed = solver.continue_solving(
+                feedback=feedback,
+                max_attempts=30,
                 on_attempt=on_attempt,
             )
 
