@@ -1,10 +1,10 @@
 """Interactive problem preprocessor - generates data generator and judge."""
 
+import json
 import os
 import re
 
-from google import genai
-from google.genai import types
+from openai import OpenAI
 
 PREPROCESSOR_SYSTEM_PROMPT = """你是一名**顶级 ICPC / CCPC 竞赛出题人**。
 你的任务是为交互题生成**数据生成器**和**评测机（Judge/Interactor）**。
@@ -85,20 +85,17 @@ class InteractivePreprocessor:
         base_url: str | None = None,
         model: str | None = None,
     ):
-        self.api_key = api_key or os.environ.get("GEMINI_API_KEY")
+        self.api_key = api_key or os.environ.get("OPENAI_API_KEY")
         if not self.api_key:
             raise ValueError("API key required")
 
-        self.base_url = base_url or os.environ.get("GEMINI_BASE_URL")
-        self.model = model or os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
+        self.base_url = base_url or os.environ.get("OPENAI_BASE_URL")
+        self.model = model or os.environ.get("OPENAI_MODEL", "gpt-4")
 
-        if self.base_url:
-            self.client = genai.Client(
-                api_key=self.api_key,
-                http_options=types.HttpOptions(base_url=self.base_url),
-            )
-        else:
-            self.client = genai.Client(api_key=self.api_key)
+        self.client = OpenAI(
+            api_key=self.api_key,
+            base_url=self.base_url,
+        )
 
     def generate(
         self,
@@ -122,13 +119,9 @@ class InteractivePreprocessor:
             model=self.model,
         )
 
-        config = types.GenerateContentConfig(
-            system_instruction=PREPROCESSOR_SYSTEM_PROMPT,
-            temperature=1.0,
-            thinking_config=types.ThinkingConfig(thinking_level="high"),
-        )
-
-        contents: list[types.Content] = []
+        messages: list[dict] = [
+            {"role": "system", "content": PREPROCESSOR_SYSTEM_PROMPT},
+        ]
 
         initial_prompt = f"""请为以下交互题生成数据生成器和评测机：
 
@@ -145,10 +138,7 @@ class InteractivePreprocessor:
 - 所有 print 语句都使用 flush=True
 """
 
-        contents.append(types.Content(
-            role="user",
-            parts=[types.Part.from_text(text=initial_prompt)],
-        ))
+        messages.append({"role": "user", "content": initial_prompt})
 
         for attempt in range(max_attempts):
             print(f"\n[预处理] 生成评测机和数据生成器 (尝试 {attempt + 1}/{max_attempts})...")
@@ -156,10 +146,10 @@ class InteractivePreprocessor:
             response = None
             for retry in range(10):
                 try:
-                    response = self.client.models.generate_content(
+                    response = self.client.chat.completions.create(
                         model=self.model,
-                        contents=contents,
-                        config=config,
+                        messages=messages,
+                        temperature=1.0,
                     )
                     break
                 except Exception as e:
@@ -169,17 +159,15 @@ class InteractivePreprocessor:
                     import time
                     time.sleep(3)
 
-            if not response or not response.candidates:
+            if not response or not response.choices:
                 continue
 
-            candidate = response.candidates[0]
-            if not candidate.content:
+            choice = response.choices[0]
+            if not choice.message:
                 continue
 
-            response_text = ""
-            for part in candidate.content.parts:
-                if part.text:
-                    response_text += part.text
+            response_text = choice.message.content or ""
+            messages.append(choice.message.model_dump())
 
             # Extract generator and judge code
             generator_code = self._extract_code(response_text, "generator")
@@ -187,13 +175,10 @@ class InteractivePreprocessor:
 
             if not generator_code or not judge_code:
                 print("  未能提取到完整代码，重试...")
-                contents.append(candidate.content)
-                contents.append(types.Content(
-                    role="user",
-                    parts=[types.Part.from_text(
-                        text="请确保输出完整的代码，用 ```generator 和 ```judge 分别包裹数据生成器和评测机代码。"
-                    )],
-                ))
+                messages.append({
+                    "role": "user",
+                    "content": "请确保输出完整的代码，用 ```generator 和 ```judge 分别包裹数据生成器和评测机代码。"
+                })
                 continue
 
             print(f"  生成器: {len(generator_code)} 字符")
@@ -210,17 +195,14 @@ class InteractivePreprocessor:
             print(f"  验证发现问题: {issues[:200]}...")
 
             # Add feedback and retry
-            contents.append(candidate.content)
-            contents.append(types.Content(
-                role="user",
-                parts=[types.Part.from_text(
-                    text=f"""验证器发现以下问题：
+            messages.append({
+                "role": "user",
+                "content": f"""验证器发现以下问题：
 
 {issues}
 
 请修正这些问题，重新生成数据生成器和评测机代码。"""
-                )],
-            ))
+            })
 
         print("[预处理] 生成失败，已达最大尝试次数")
         return None

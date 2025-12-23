@@ -1,13 +1,13 @@
 """Algorithm solver agent."""
 
+import json
 import os
 import re
 from datetime import datetime
 from pathlib import Path
 from typing import Callable, TextIO
 
-from google import genai
-from google.genai import types
+from openai import OpenAI
 
 from AICodeforcer.standard.agents.brute_force import BruteForceGenerator
 from AICodeforcer.standard.agents.cpp_translator import CppTranslator
@@ -160,45 +160,49 @@ TOOL_FUNCTIONS = {
 }
 
 TOOL_DECLARATIONS = [
-    types.Tool(function_declarations=[
-        types.FunctionDeclaration(
-            name="run_python_code",
-            description="执行 Python 代码并返回结果。用于测试算法代码。代码必须完整自包含、可直接运行；所有辅助函数必须在同一代码块中实现；显式导入所需标准库；禁止第三方库；不得引用未定义/未导入的符号。",
-            parameters=types.Schema(
-                type=types.Type.OBJECT,
-                properties={
-                    "code": types.Schema(
-                        type=types.Type.STRING,
-                        description="要执行的 Python 代码，应从 stdin 读取输入，输出到 stdout",
-                    ),
-                    "test_input": types.Schema(
-                        type=types.Type.STRING,
-                        description="提供给代码的测试输入",
-                    ),
+    {
+        "type": "function",
+        "function": {
+            "name": "run_python_code",
+            "description": "执行 Python 代码并返回结果。用于测试算法代码。代码必须完整自包含、可直接运行；所有辅助函数必须在同一代码块中实现；显式导入所需标准库；禁止第三方库；不得引用未定义/未导入的符号。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "code": {
+                        "type": "string",
+                        "description": "要执行的 Python 代码，应从 stdin 读取输入，输出到 stdout",
+                    },
+                    "test_input": {
+                        "type": "string",
+                        "description": "提供给代码的测试输入",
+                    },
                 },
-                required=["code", "test_input"],
-            ),
-        ),
-        types.FunctionDeclaration(
-            name="stress_test",
-            description="对拍验证工具：比较你的优化算法和系统预生成的暴力算法的输出。固定运行 1000 次测试。你只需提供 solution_code，暴力算法和数据生成器已由系统在独立会话中生成。代码必须完整自包含，从 stdin 读取、向 stdout 输出。",
-            parameters=types.Schema(
-                type=types.Type.OBJECT,
-                properties={
-                    "solution_code": types.Schema(
-                        type=types.Type.STRING,
-                        description="要验证的优化算法代码（完整自包含，从 stdin 读取，输出到 stdout）",
-                    ),
+                "required": ["code", "test_input"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "stress_test",
+            "description": "对拍验证工具：比较你的优化算法和系统预生成的暴力算法的输出。固定运行 1000 次测试。你只需提供 solution_code，暴力算法和数据生成器已由系统在独立会话中生成。代码必须完整自包含，从 stdin 读取、向 stdout 输出。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "solution_code": {
+                        "type": "string",
+                        "description": "要验证的优化算法代码（完整自包含，从 stdin 读取，输出到 stdout）",
+                    },
                 },
-                required=["solution_code"],
-            ),
-        ),
-    ])
+                "required": ["solution_code"],
+            },
+        },
+    },
 ]
 
 
 class AlgorithmSolver:
-    """Gemini-powered algorithm problem solver."""
+    """OpenAI-powered algorithm problem solver."""
 
     def __init__(
         self,
@@ -207,23 +211,19 @@ class AlgorithmSolver:
         model: str | None = None,
         log_dir: str | None = None,
     ):
-        self.api_key = api_key or os.environ.get("GEMINI_API_KEY")
+        self.api_key = api_key or os.environ.get("OPENAI_API_KEY")
         if not self.api_key:
-            raise ValueError("API key required. Set GEMINI_API_KEY environment variable.")
+            raise ValueError("API key required. Set OPENAI_API_KEY environment variable.")
 
-        self.base_url = base_url or os.environ.get("GEMINI_BASE_URL")
-        self.model = model or os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
+        self.base_url = base_url or os.environ.get("OPENAI_BASE_URL")
+        self.model = model or os.environ.get("OPENAI_MODEL", "gpt-4")
 
-        if self.base_url:
-            self.client = genai.Client(
-                api_key=self.api_key,
-                http_options=types.HttpOptions(base_url=self.base_url),
-            )
-        else:
-            self.client = genai.Client(api_key=self.api_key)
+        self.client = OpenAI(
+            api_key=self.api_key,
+            base_url=self.base_url,
+        )
 
-        self._contents: list[types.Content] = []
-        self._config: types.GenerateContentConfig | None = None
+        self._messages: list[dict] = []
         self._last_verified_code: str | None = None
         self._last_code: str | None = None
 
@@ -378,15 +378,9 @@ class AlgorithmSolver:
             self._brute_force_code = None
             self._generator_code = None
 
-        config = types.GenerateContentConfig(
-            system_instruction=SYSTEM_PROMPT,
-            tools=TOOL_DECLARATIONS,
-            automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
-            temperature=1.0,
-            thinking_config=types.ThinkingConfig(thinking_level="high"),
-        )
-
-        contents: list[types.Content] = []
+        messages: list[dict] = [
+            {"role": "system", "content": SYSTEM_PROMPT},
+        ]
 
         initial_prompt = f"""请解决以下算法题目：
 
@@ -395,10 +389,7 @@ class AlgorithmSolver:
 请按照解题流程分析题目，设计算法，编写代码，并使用工具测试验证。
 记住：必须调用 run_python_code 测试样例，必须调用 stress_test 进行对拍验证。"""
 
-        contents.append(types.Content(
-            role="user",
-            parts=[types.Part.from_text(text=initial_prompt)],
-        ))
+        messages.append({"role": "user", "content": initial_prompt})
 
         last_code: str | None = None
         attempt_count = 0
@@ -409,10 +400,11 @@ class AlgorithmSolver:
             response = None
             for retry in range(30):
                 try:
-                    response = self.client.models.generate_content(
+                    response = self.client.chat.completions.create(
                         model=self.model,
-                        contents=contents,
-                        config=config,
+                        messages=messages,
+                        tools=TOOL_DECLARATIONS,
+                        temperature=1.0,
                     )
                     break
                 except Exception as e:
@@ -426,30 +418,17 @@ class AlgorithmSolver:
             if not response:
                 break
 
-            candidate = response.candidates[0] if response.candidates else None
-            if not candidate or not candidate.content:
+            choice = response.choices[0] if response.choices else None
+            if not choice or not choice.message:
                 print(f"[Turn {turn + 1}] 无响应内容")
                 self._log(f"[Turn {turn + 1}] 无响应内容")
                 break
 
-            response_content = candidate.content
-            contents.append(response_content)
+            message = choice.message
+            messages.append(message.model_dump())
 
-            response_text = ""
-            function_calls = []
-
-            # 调试：打印 parts 信息
-            print(f"\n[DEBUG] 收到 {len(response_content.parts)} 个 parts:")
-            for i, part in enumerate(response_content.parts):
-                part_type = "text" if part.text else ("fc" if part.function_call else "other")
-                is_thought = getattr(part, 'thought', False)
-                text_len = len(part.text) if part.text else 0
-                print(f"  [part {i}] type={part_type}, thought={is_thought}, text_len={text_len}")
-
-                if part.text:
-                    response_text += part.text
-                if part.function_call:
-                    function_calls.append(part.function_call)
+            response_text = message.content or ""
+            tool_calls = message.tool_calls or []
 
             print(f"\n{'='*60}")
             print(f"Turn {turn + 1}")
@@ -471,12 +450,11 @@ class AlgorithmSolver:
                 if on_attempt:
                     on_attempt(attempt_count, code)
 
-            if "ALL_TESTS_PASSED" in response_text and not function_calls:
+            if "ALL_TESTS_PASSED" in response_text and not tool_calls:
                 if stress_test_passed and verified_code:
                     print("\n[程序化校验] 对拍已通过，返回验证过的代码")
                     self._log("[程序化校验] 对拍已通过，返回验证过的代码")
-                    self._contents = contents
-                    self._config = config
+                    self._messages = messages
                     self._last_verified_code = verified_code
                     self._last_code = verified_code
                     cpp_code = self._translate_to_cpp(verified_code)
@@ -484,21 +462,19 @@ class AlgorithmSolver:
                 else:
                     print("\n[程序化校验] 模型声称通过但未检测到 STRESS TEST PASSED，要求重新验证")
                     self._log("[程序化校验] 模型声称通过但未检测到 STRESS TEST PASSED，要求重新验证")
-                    contents.append(types.Content(
-                        role="user",
-                        parts=[types.Part.from_text(
-                            text="你声称 ALL_TESTS_PASSED，但系统未检测到对拍通过。请调用 stress_test 工具进行对拍验证，必须看到 'STRESS TEST PASSED' 才算通过。"
-                        )],
-                    ))
+                    messages.append({
+                        "role": "user",
+                        "content": "你声称 ALL_TESTS_PASSED，但系统未检测到对拍通过。请调用 stress_test 工具进行对拍验证，必须看到 'STRESS TEST PASSED' 才算通过。"
+                    })
                     continue
 
-            if function_calls:
-                print(f"\n[工具调用] 共 {len(function_calls)} 个")
-                function_responses = []
+            if tool_calls:
+                print(f"\n[工具调用] 共 {len(tool_calls)} 个")
+                tool_messages = []
 
-                for fc in function_calls:
-                    func_name = fc.name
-                    func_args = dict(fc.args) if fc.args else {}
+                for tc in tool_calls:
+                    func_name = tc.function.name
+                    func_args = json.loads(tc.function.arguments)
 
                     if func_name == "stress_test":
                         # 只保留 solution_code，注入预生成的暴力代码
@@ -513,10 +489,11 @@ class AlgorithmSolver:
                         else:
                             result = "Error: 暴力算法未生成，无法进行对拍验证"
                             self._log_tool_call(func_name, {"solution_code": solution_code}, result)
-                            function_responses.append(types.Part.from_function_response(
-                                name=func_name,
-                                response={"result": result},
-                            ))
+                            tool_messages.append({
+                                "role": "tool",
+                                "tool_call_id": tc.id,
+                                "content": result,
+                            })
                             print(f"    结果: {result}")
                             continue
                     elif func_name == "run_python_code":
@@ -550,36 +527,30 @@ class AlgorithmSolver:
                     if len(result) > 500:
                         print(f"    ... (truncated, total {len(result)} chars)")
 
-                    function_responses.append(types.Part.from_function_response(
-                        name=func_name,
-                        response={"result": result},
-                    ))
+                    tool_messages.append({
+                        "role": "tool",
+                        "tool_call_id": tc.id,
+                        "content": result,
+                    })
 
-                contents.append(types.Content(
-                    role="user",
-                    parts=function_responses,
-                ))
+                messages.extend(tool_messages)
 
                 if stress_test_passed and verified_code:
                     print("\n[程序化校验] 对拍已通过 1000 次测试，直接返回验证过的代码")
                     self._log("[程序化校验] 对拍已通过 1000 次测试，直接返回验证过的代码")
-                    self._contents = contents
-                    self._config = config
+                    self._messages = messages
                     self._last_verified_code = verified_code
                     self._last_code = verified_code
                     cpp_code = self._translate_to_cpp(verified_code)
                     return verified_code, cpp_code, True
             else:
                 if turn < max_attempts - 1:
-                    contents.append(types.Content(
-                        role="user",
-                        parts=[types.Part.from_text(
-                            text="请继续。记住必须调用工具验证代码。如果所有测试和对拍都通过了，请输出 'ALL_TESTS_PASSED' 并给出最终代码。"
-                        )],
-                    ))
+                    messages.append({
+                        "role": "user",
+                        "content": "请继续。记住必须调用工具验证代码。如果所有测试和对拍都通过了，请输出 'ALL_TESTS_PASSED' 并给出最终代码。"
+                    })
 
-        self._contents = contents
-        self._config = config
+        self._messages = messages
         self._last_code = last_code
         cpp_code = self._translate_to_cpp(last_code)
         return last_code, cpp_code, False
@@ -595,7 +566,7 @@ class AlgorithmSolver:
         Returns:
             (python_code, cpp_code, success) 元组
         """
-        if not self._contents or not self._config:
+        if not self._messages:
             raise RuntimeError("没有可继续的对话，请先调用 solve()")
 
         # 重新打开日志文件（追加模式）
@@ -621,8 +592,7 @@ class AlgorithmSolver:
         on_attempt: Callable[[int, str], None] | None,
     ) -> tuple[str | None, str | None, bool]:
         """继续优化的实际逻辑。"""
-        contents = self._contents
-        config = self._config
+        messages = self._messages
 
         feedback_prompt = f"""用户提交代码后收到以下反馈：
 
@@ -639,10 +609,7 @@ class AlgorithmSolver:
 - MLE (Memory Limit Exceeded): 需要优化空间复杂度
 - RE (Runtime Error): 可能是数组越界、除零、栈溢出等"""
 
-        contents.append(types.Content(
-            role="user",
-            parts=[types.Part.from_text(text=feedback_prompt)],
-        ))
+        messages.append({"role": "user", "content": feedback_prompt})
 
         last_code: str | None = self._last_code or self._last_verified_code
         attempt_count = 0
@@ -653,10 +620,11 @@ class AlgorithmSolver:
             response = None
             for retry in range(30):
                 try:
-                    response = self.client.models.generate_content(
+                    response = self.client.chat.completions.create(
                         model=self.model,
-                        contents=contents,
-                        config=config,
+                        messages=messages,
+                        tools=TOOL_DECLARATIONS,
+                        temperature=1.0,
                     )
                     break
                 except Exception as e:
@@ -670,30 +638,17 @@ class AlgorithmSolver:
             if not response:
                 break
 
-            candidate = response.candidates[0] if response.candidates else None
-            if not candidate or not candidate.content:
+            choice = response.choices[0] if response.choices else None
+            if not choice or not choice.message:
                 print(f"[Turn {turn + 1}] 无响应内容")
                 self._log(f"[Turn {turn + 1}] 无响应内容")
                 break
 
-            response_content = candidate.content
-            contents.append(response_content)
+            message = choice.message
+            messages.append(message.model_dump())
 
-            response_text = ""
-            function_calls = []
-
-            # 调试：打印 parts 信息
-            print(f"\n[DEBUG] 收到 {len(response_content.parts)} 个 parts:")
-            for i, part in enumerate(response_content.parts):
-                part_type = "text" if part.text else ("fc" if part.function_call else "other")
-                is_thought = getattr(part, 'thought', False)
-                text_len = len(part.text) if part.text else 0
-                print(f"  [part {i}] type={part_type}, thought={is_thought}, text_len={text_len}")
-
-                if part.text:
-                    response_text += part.text
-                if part.function_call:
-                    function_calls.append(part.function_call)
+            response_text = message.content or ""
+            tool_calls = message.tool_calls or []
 
             print(f"\n{'='*60}")
             print(f"Turn {turn + 1}")
@@ -715,11 +670,11 @@ class AlgorithmSolver:
                 if on_attempt:
                     on_attempt(attempt_count, code)
 
-            if "ALL_TESTS_PASSED" in response_text and not function_calls:
+            if "ALL_TESTS_PASSED" in response_text and not tool_calls:
                 if stress_test_passed and verified_code:
                     print("\n[程序化校验] 对拍已通过，返回验证过的代码")
                     self._log("[程序化校验] 对拍已通过，返回验证过的代码")
-                    self._contents = contents
+                    self._messages = messages
                     self._last_verified_code = verified_code
                     self._last_code = verified_code
                     cpp_code = self._translate_to_cpp(verified_code)
@@ -727,21 +682,19 @@ class AlgorithmSolver:
                 else:
                     print("\n[程序化校验] 模型声称通过但未检测到 STRESS TEST PASSED，要求重新验证")
                     self._log("[程序化校验] 模型声称通过但未检测到 STRESS TEST PASSED，要求重新验证")
-                    contents.append(types.Content(
-                        role="user",
-                        parts=[types.Part.from_text(
-                            text="你声称 ALL_TESTS_PASSED，但系统未检测到对拍通过。请调用 stress_test 工具进行对拍验证。"
-                        )],
-                    ))
+                    messages.append({
+                        "role": "user",
+                        "content": "你声称 ALL_TESTS_PASSED，但系统未检测到对拍通过。请调用 stress_test 工具进行对拍验证。"
+                    })
                     continue
 
-            if function_calls:
-                print(f"\n[工具调用] 共 {len(function_calls)} 个")
-                function_responses = []
+            if tool_calls:
+                print(f"\n[工具调用] 共 {len(tool_calls)} 个")
+                tool_messages = []
 
-                for fc in function_calls:
-                    func_name = fc.name
-                    func_args = dict(fc.args) if fc.args else {}
+                for tc in tool_calls:
+                    func_name = tc.function.name
+                    func_args = json.loads(tc.function.arguments)
 
                     if func_name == "stress_test":
                         # 只保留 solution_code，注入预生成的暴力代码
@@ -756,10 +709,11 @@ class AlgorithmSolver:
                         else:
                             result = "Error: 暴力算法未生成，无法进行对拍验证"
                             self._log_tool_call(func_name, {"solution_code": solution_code}, result)
-                            function_responses.append(types.Part.from_function_response(
-                                name=func_name,
-                                response={"result": result},
-                            ))
+                            tool_messages.append({
+                                "role": "tool",
+                                "tool_call_id": tc.id,
+                                "content": result,
+                            })
                             print(f"    结果: {result}")
                             continue
                     elif func_name == "run_python_code":
@@ -793,34 +747,30 @@ class AlgorithmSolver:
                     if len(result) > 500:
                         print(f"    ... (truncated, total {len(result)} chars)")
 
-                    function_responses.append(types.Part.from_function_response(
-                        name=func_name,
-                        response={"result": result},
-                    ))
+                    tool_messages.append({
+                        "role": "tool",
+                        "tool_call_id": tc.id,
+                        "content": result,
+                    })
 
-                contents.append(types.Content(
-                    role="user",
-                    parts=function_responses,
-                ))
+                messages.extend(tool_messages)
 
                 if stress_test_passed and verified_code:
                     print("\n[程序化校验] 对拍已通过 1000 次测试，直接返回验证过的代码")
                     self._log("[程序化校验] 对拍已通过 1000 次测试，直接返回验证过的代码")
-                    self._contents = contents
+                    self._messages = messages
                     self._last_verified_code = verified_code
                     self._last_code = verified_code
                     cpp_code = self._translate_to_cpp(verified_code)
                     return verified_code, cpp_code, True
             else:
                 if turn < max_attempts - 1:
-                    contents.append(types.Content(
-                        role="user",
-                        parts=[types.Part.from_text(
-                            text="请继续。记住必须调用工具验证代码。"
-                        )],
-                    ))
+                    messages.append({
+                        "role": "user",
+                        "content": "请继续。记住必须调用工具验证代码。"
+                    })
 
-        self._contents = contents
+        self._messages = messages
         self._last_code = last_code
         cpp_code = self._translate_to_cpp(last_code)
         return last_code, cpp_code, False

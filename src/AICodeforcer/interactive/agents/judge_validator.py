@@ -1,9 +1,9 @@
 """Judge validator - validates generator and judge code with fresh AI session."""
 
+import json
 import os
 
-from google import genai
-from google.genai import types
+from openai import OpenAI
 
 VALIDATOR_SYSTEM_PROMPT = """你是一名**代码审查专家**，专门审查交互题的评测机和数据生成器。
 
@@ -48,20 +48,17 @@ class JudgeValidator:
         base_url: str | None = None,
         model: str | None = None,
     ):
-        self.api_key = api_key or os.environ.get("GEMINI_API_KEY")
+        self.api_key = api_key or os.environ.get("OPENAI_API_KEY")
         if not self.api_key:
             raise ValueError("API key required")
 
-        self.base_url = base_url or os.environ.get("GEMINI_BASE_URL")
-        self.model = model or os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
+        self.base_url = base_url or os.environ.get("OPENAI_BASE_URL")
+        self.model = model or os.environ.get("OPENAI_MODEL", "gpt-4")
 
-        if self.base_url:
-            self.client = genai.Client(
-                api_key=self.api_key,
-                http_options=types.HttpOptions(base_url=self.base_url),
-            )
-        else:
-            self.client = genai.Client(api_key=self.api_key)
+        self.client = OpenAI(
+            api_key=self.api_key,
+            base_url=self.base_url,
+        )
 
     def validate(
         self,
@@ -79,12 +76,6 @@ class JudgeValidator:
         Returns:
             (is_valid, issues_or_empty) tuple
         """
-        config = types.GenerateContentConfig(
-            system_instruction=VALIDATOR_SYSTEM_PROMPT,
-            temperature=0.5,  # Lower temperature for more consistent validation
-            thinking_config=types.ThinkingConfig(thinking_level="medium"),
-        )
-
         prompt = f"""请审查以下交互题的数据生成器和评测机代码。
 
 ## 题目
@@ -106,17 +97,17 @@ class JudgeValidator:
 请检查代码是否正确实现了题目要求的交互协议。如果没有问题，输出 VALID；如果有问题，输出 INVALID: <问题描述>。
 """
 
-        contents = [types.Content(
-            role="user",
-            parts=[types.Part.from_text(text=prompt)],
-        )]
+        messages = [
+            {"role": "system", "content": VALIDATOR_SYSTEM_PROMPT},
+            {"role": "user", "content": prompt},
+        ]
 
         for retry in range(5):
             try:
-                response = self.client.models.generate_content(
+                response = self.client.chat.completions.create(
                     model=self.model,
-                    contents=contents,
-                    config=config,
+                    messages=messages,
+                    temperature=0.5,  # Lower temperature for more consistent validation
                 )
                 break
             except Exception as e:
@@ -126,19 +117,14 @@ class JudgeValidator:
                 import time
                 time.sleep(2)
 
-        if not response or not response.candidates:
+        if not response or not response.choices:
             return False, "验证无响应"
 
-        candidate = response.candidates[0]
-        if not candidate.content:
+        choice = response.choices[0]
+        if not choice.message:
             return False, "验证无内容"
 
-        response_text = ""
-        for part in candidate.content.parts:
-            if part.text:
-                response_text += part.text
-
-        response_text = response_text.strip()
+        response_text = (choice.message.content or "").strip()
 
         if "VALID" in response_text and "INVALID" not in response_text:
             return True, ""

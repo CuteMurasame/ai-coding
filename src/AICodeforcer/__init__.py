@@ -1,4 +1,4 @@
-"""Gemini-powered algorithm problem solver agent."""
+"""OpenAI-powered algorithm problem solver agent."""
 
 from AICodeforcer.types import Problem, TestCase, ExecutionResult
 from AICodeforcer.standard.agents import AlgorithmSolver

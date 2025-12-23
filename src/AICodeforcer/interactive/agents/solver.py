@@ -1,13 +1,13 @@
 """Interactive problem solver agent."""
 
+import json
 import os
 import re
 from datetime import datetime
 from pathlib import Path
 from typing import Callable, TextIO
 
-from google import genai
-from google.genai import types
+from openai import OpenAI
 
 from AICodeforcer.interactive.tools import interactive_stress_test
 from AICodeforcer.standard.agents.cpp_translator import CppTranslator
