@@ -1,8 +1,8 @@
 # AICodeforcer
 
-Gemini-powered algorithm problem solver agent.
+OpenAI-powered algorithm problem solver agent.
 
-使用 Gemini AI 自动解决 Codeforces 等 OJ 平台的算法竞赛题目，支持自动对拍验证和 Python 转 C++ 翻译。
+使用 OpenAI API 自动解决 Codeforces 等 OJ 平台的算法竞赛题目，支持自动对拍验证和 Python 转 C++ 翻译。
 
 ## 功能特性
 
@@ -29,12 +29,12 @@ pip install -e .
 
 ## 配置
 
-创建 `.env` 文件并配置 Gemini API：
+创建 `.env` 文件并配置 OpenAI API：
 
 ```bash
-GEMINI_API_KEY=your_api_key_here
-GEMINI_MODEL=gemini-2.5-flash  # 可选，默认 gemini-2.5-flash
-GEMINI_BASE_URL=https://your-proxy.com  # 可选，自定义 API 地址
+OPENAI_API_KEY=your_api_key_here
+OPENAI_MODEL=gpt-4  # 可选，默认 gpt-4
+OPENAI_BASE_URL=https://your-proxy.com  # 可选，自定义 API 地址
 ```
 
 ## 使用方法
@@ -86,8 +86,7 @@ src/AICodeforcer/
 ## 依赖
 
 - Python >= 3.10
-- google-genai >= 1.0.0
-- pydantic >= 2.0
+- openai >= 1.0.0
 - python-dotenv >= 1.2.1
 
 ---

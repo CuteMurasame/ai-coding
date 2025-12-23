@@ -48,13 +48,13 @@ def print_solution(python_code: str | None, cpp_code: str | None, passed: bool) 
 def main() -> int:
     """Main entry point."""
     import os
-    api_key = os.environ.get("GEMINI_API_KEY")
+    api_key = os.environ.get("OPENAI_API_KEY")
     if not api_key:
-        print("错误: 请设置 GEMINI_API_KEY 环境变量")
+        print("错误: 请设置 OPENAI_API_KEY 环境变量")
         return 1
 
     print("=" * 60)
-    print("  AICodeforcer - Gemini 算法题解 Agent")
+    print("  AICodeforcer - OpenAI 算法题解 Agent")
     print("=" * 60)
     print()
     print("请选择模式:")
