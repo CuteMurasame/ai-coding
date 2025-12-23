@@ -1,12 +1,12 @@
 """Brute force algorithm generator agent."""
 
 import concurrent.futures
+import json
 import os
 import re
 import time
 
-from google import genai
-from google.genai import types
+from openai import OpenAI
 
 from AICodeforcer.standard.tools.executor import execute_code
 
@@ -84,20 +84,17 @@ class BruteForceGenerator:
         base_url: str | None = None,
         model: str | None = None,
     ):
-        self.api_key = api_key or os.environ.get("GEMINI_API_KEY")
+        self.api_key = api_key or os.environ.get("OPENAI_API_KEY")
         if not self.api_key:
             raise ValueError("API key required.")
 
-        self.base_url = base_url or os.environ.get("GEMINI_BASE_URL")
-        self.model = model or os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
+        self.base_url = base_url or os.environ.get("OPENAI_BASE_URL")
+        self.model = model or os.environ.get("OPENAI_MODEL", "gpt-4")
 
-        if self.base_url:
-            self.client = genai.Client(
-                api_key=self.api_key,
-                http_options=types.HttpOptions(base_url=self.base_url),
-            )
-        else:
-            self.client = genai.Client(api_key=self.api_key)
+        self.client = OpenAI(
+            api_key=self.api_key,
+            base_url=self.base_url,
+        )
 
     def generate(self, problem_text: str) -> tuple[str, str] | None:
         """生成暴力算法和数据生成器。
@@ -112,12 +109,6 @@ class BruteForceGenerator:
         print("  生成暴力算法和数据生成器 (独立会话)")
         print("=" * 60)
 
-        config = types.GenerateContentConfig(
-            system_instruction=BRUTE_FORCE_PROMPT,
-            temperature=1.0,
-            thinking_config=types.ThinkingConfig(thinking_level="high"),
-        )
-
         user_prompt = f"""请为以下算法题编写暴力算法和数据生成器：
 
 {problem_text}
@@ -127,20 +118,18 @@ class BruteForceGenerator:
 2. 输出格式必须严格符合题目要求
 3. 用 # BRUTE_FORCE 和 # GENERATOR 标记两段代码"""
 
-        contents = [
-            types.Content(
-                role="user",
-                parts=[types.Part.from_text(text=user_prompt)],
-            )
+        messages = [
+            {"role": "system", "content": BRUTE_FORCE_PROMPT},
+            {"role": "user", "content": user_prompt},
         ]
 
         response = None
         for retry in range(30):
             try:
-                response = self.client.models.generate_content(
+                response = self.client.chat.completions.create(
                     model=self.model,
-                    contents=contents,
-                    config=config,
+                    messages=messages,
+                    temperature=1.0,
                 )
                 break
             except Exception as e:
@@ -154,16 +143,12 @@ class BruteForceGenerator:
         if not response:
             return None
 
-        candidate = response.candidates[0] if response.candidates else None
-        if not candidate or not candidate.content:
+        choice = response.choices[0] if response.choices else None
+        if not choice or not choice.message:
             print("[暴力生成] 无响应内容")
             return None
 
-        response_text = ""
-        for part in candidate.content.parts:
-            if part.text:
-                response_text += part.text
-
+        response_text = choice.message.content or ""
         if not response_text.strip():
             print("[暴力生成] 无有效输出")
             return None
@@ -237,18 +222,9 @@ class BruteForceGenerator:
             (brute_force_code, generator_code, agent_id) 或 None
         """
         # 为每个线程创建独立的 client，避免并发安全问题
-        if self.base_url:
-            client = genai.Client(
-                api_key=self.api_key,
-                http_options=types.HttpOptions(base_url=self.base_url),
-            )
-        else:
-            client = genai.Client(api_key=self.api_key)
-
-        config = types.GenerateContentConfig(
-            system_instruction=BRUTE_FORCE_PROMPT,
-            temperature=1.0,
-            thinking_config=types.ThinkingConfig(thinking_level="high"),
+        client = OpenAI(
+            api_key=self.api_key,
+            base_url=self.base_url,
         )
 
         user_prompt = f"""请为以下算法题编写暴力算法和数据生成器：
@@ -260,20 +236,18 @@ class BruteForceGenerator:
 2. 输出格式必须严格符合题目要求
 3. 用 # BRUTE_FORCE 和 # GENERATOR 标记两段代码"""
 
-        contents = [
-            types.Content(
-                role="user",
-                parts=[types.Part.from_text(text=user_prompt)],
-            )
+        messages = [
+            {"role": "system", "content": BRUTE_FORCE_PROMPT},
+            {"role": "user", "content": user_prompt},
         ]
 
         response = None
         for retry in range(30):
             try:
-                response = client.models.generate_content(
+                response = client.chat.completions.create(
                     model=self.model,
-                    contents=contents,
-                    config=config,
+                    messages=messages,
+                    temperature=1.0,
                 )
                 break
             except Exception as e:
@@ -285,15 +259,11 @@ class BruteForceGenerator:
         if not response:
             return None
 
-        candidate = response.candidates[0] if response.candidates else None
-        if not candidate or not candidate.content:
+        choice = response.choices[0] if response.choices else None
+        if not choice or not choice.message:
             return None
 
-        response_text = ""
-        for part in candidate.content.parts:
-            if part.text:
-                response_text += part.text
-
+        response_text = choice.message.content or ""
         if not response_text.strip():
             return None
 

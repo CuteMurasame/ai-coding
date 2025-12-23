@@ -1,11 +1,11 @@
 """C++ translator agent for converting Python to competitive programming style C++."""
 
+import json
 import os
 import re
 import time
 
-from google import genai
-from google.genai import types
+from openai import OpenAI
 
 CPP_TRANSLATOR_PROMPT = """# Role
 你是一个资深的 C++ 算法竞赛（Competitive Programming）选手。你的任务是将输入的 Python 算法代码翻译成一种特定的"竞赛个人模版风格" C++ 代码。
@@ -99,20 +99,17 @@ class CppTranslator:
         base_url: str | None = None,
         model: str | None = None,
     ):
-        self.api_key = api_key or os.environ.get("GEMINI_API_KEY")
+        self.api_key = api_key or os.environ.get("OPENAI_API_KEY")
         if not self.api_key:
             raise ValueError("API key required.")
 
-        self.base_url = base_url or os.environ.get("GEMINI_BASE_URL")
-        self.model = model or os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
+        self.base_url = base_url or os.environ.get("OPENAI_BASE_URL")
+        self.model = model or os.environ.get("OPENAI_MODEL", "gpt-4")
 
-        if self.base_url:
-            self.client = genai.Client(
-                api_key=self.api_key,
-                http_options=types.HttpOptions(base_url=self.base_url),
-            )
-        else:
-            self.client = genai.Client(api_key=self.api_key)
+        self.client = OpenAI(
+            api_key=self.api_key,
+            base_url=self.base_url,
+        )
 
     def translate(self, python_code: str) -> str | None:
         """将 Python 代码翻译成 C++ 竞赛风格代码。
@@ -127,30 +124,22 @@ class CppTranslator:
         print("  翻译 Python -> C++")
         print("=" * 60)
 
-        config = types.GenerateContentConfig(
-            system_instruction=CPP_TRANSLATOR_PROMPT,
-            temperature=1.0,
-            thinking_config=types.ThinkingConfig(thinking_level="high"),
-        )
-
         user_prompt = f"""```python
 {python_code}
 ```"""
 
-        contents = [
-            types.Content(
-                role="user",
-                parts=[types.Part.from_text(text=user_prompt)],
-            )
+        messages = [
+            {"role": "system", "content": CPP_TRANSLATOR_PROMPT},
+            {"role": "user", "content": user_prompt},
         ]
 
         response = None
         for retry in range(30):
             try:
-                response = self.client.models.generate_content(
+                response = self.client.chat.completions.create(
                     model=self.model,
-                    contents=contents,
-                    config=config,
+                    messages=messages,
+                    temperature=1.0,
                 )
                 break
             except Exception as e:
@@ -163,16 +152,12 @@ class CppTranslator:
         if not response:
             return None
 
-        candidate = response.candidates[0] if response.candidates else None
-        if not candidate or not candidate.content:
+        choice = response.choices[0] if response.choices else None
+        if not choice or not choice.message:
             print("[翻译] 无响应内容")
             return None
 
-        response_text = ""
-        for part in candidate.content.parts:
-            if part.text:
-                response_text += part.text
-
+        response_text = choice.message.content or ""
         if not response_text.strip():
             print("[翻译] 无有效输出")
             return None
