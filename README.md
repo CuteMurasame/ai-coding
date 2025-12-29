@@ -1,3 +1,5 @@
+# $\color{red}{\textbf{This project is only for educational purposes. Do not use it to cheat.}}$
+
 # AICodeforcer
 
 OpenAI-powered algorithm problem solver agent.
