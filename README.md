@@ -1,4 +1,5 @@
-# $\color{red}{\textbf{This project is only for educational purposes. Do not use it to cheat.}}$
+# $\color{red}{\textbf{This project is only for educational purposes.}}$
+# $\color{red}{\textbf{Do not use it to cheat.}}$
 
 # AICodeforcer
 
